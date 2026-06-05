@@ -1,0 +1,68 @@
+# Publish to npm via OIDC Trusted Publishing — no NPM_TOKEN needed.
+#
+# One-time setup on npmjs.com (the package must already exist — see note):
+#   Package → Settings → Trusted Publisher → GitHub Actions:
+#     Organization or user: AbtinZo
+#     Repository:           serverless-fargate-service
+#     Workflow filename:    publish.yml      <-- must match this file's name
+#     Environment:          (leave blank)
+#
+# First-publish chicken-and-egg: a Trusted Publisher can only be configured for a
+# package that already exists on npm. Publish 0.1.0 once manually
+# (npm publish --otp=<code>), then configure the Trusted Publisher above — every
+# tagged release after that publishes here with no token.
+#
+# Usage for a new version:
+#   1. Bump "version" in package.json and commit.
+#   2. git tag v0.1.1 && git push origin v0.1.1
+#
+# Requirements (handled below): id-token: write + npm CLI >= 11.5.1.
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: # manual publish of the current package.json version
+
+permissions:
+  contents: read
+  id-token: write # OIDC: npm exchanges this for a short-lived publish token
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Ensure npm supports OIDC trusted publishing (>= 11.5.1)
+        run: npm install -g npm@latest
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG package.json=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match package.json version $PKG"
+            exit 1
+          fi
+
+      # No token: trusted publishing authenticates via the OIDC id-token above.
+      # Provenance attestations are emitted automatically (no --provenance needed).
+      - run: npm publish
