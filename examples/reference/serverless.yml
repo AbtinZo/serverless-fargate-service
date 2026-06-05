@@ -1,0 +1,145 @@
+# serverless-fargate-service — full reference example.
+#
+# A single generic web service annotated with (nearly) every supported field and
+# its default. Most fields are OPTIONAL — see examples/mcp for a minimal config.
+# Multiple services are supported: add more keys under `fargate.services`.
+
+service: my-api
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  region: us-east-2
+  stage: ${opt:stage, 'dev'}
+
+plugins:
+  - serverless-fargate-service
+
+custom:
+  # Per-stage values, selected by the deploy stage. Override anything per stage.
+  stages:
+    dev:
+      domain: api-dev.example.com
+      desiredCount: 1
+    prod:
+      domain: api.example.com
+      desiredCount: 2
+  cfg: ${self:custom.stages.${sls:stage, 'dev'}}
+
+fargate:
+  # Optional. Omit entirely to let CloudFormation auto-name a per-stack cluster.
+  cluster:
+    # name: my-shared-cluster              # default: <service>-<stage>
+    # arn: arn:aws:ecs:us-east-2:111111111111:cluster/existing  # reuse instead of creating
+    containerInsights: false # default: false
+
+  services:
+    api:
+      # name: my-api-prod                  # default: <service>-<stage>-<key>
+      cpu: 512 # default: 256
+      memory: 1024 # default: 512
+      desiredCount: ${self:custom.cfg.desiredCount} # default: 1
+      spot: false # default: false (on-demand FARGATE); true => FARGATE_SPOT
+
+      vpc:
+        id: vpc-0123456789abcdef0
+        subnets: # task subnets
+          - subnet-aaaaaaaaaaaaaaaaa
+          - subnet-bbbbbbbbbbbbbbbbb
+        assignPublicIp: false # default: false. Set true on VPCs with no NAT gateway.
+        # securityGroups:                  # extra SGs appended to the plugin-managed service SG
+        #   - sg-0123456789abcdef0
+
+      image:
+        # --- build mode: plugin builds, ensures the ECR repo, sha-tags, pushes ---
+        context: . # docker build context
+        dockerfile: Dockerfile # default: Dockerfile
+        platform: linux/amd64 # default: linux/amd64
+        tag: sha # default: sha (=> sha-<git>); or 'latest' / a literal tag
+        scanOnPush: true # default: true
+        retainRepositoryOnRemove: false # default: false (repo deleted on `serverless remove`)
+        lifecycle: # ECR lifecycle policy (defaults shown)
+          keepLastTagged: 20
+          tagPrefixes: ['sha-']
+          expireUntaggedAfterDays: 7
+        # --- consume mode (alternative to building): reference a pre-built image ---
+        # uri: 111111111111.dkr.ecr.us-east-2.amazonaws.com/my-api:sha-abc1234
+
+      container:
+        port: 8080
+        # command: ['node', 'server.js']        # override the image's CMD
+        environment: # plain (non-secret) env vars
+          NODE_ENV: production
+          STAGE: ${sls:stage}
+          PUBLIC_URL: https://${self:custom.cfg.domain}
+        secrets: # injected as ECS container secrets (ValueFrom)
+          # Secrets Manager (append :JSON_KEY:: to pull a single key out of a JSON secret)
+          DATABASE_URL: arn:aws:secretsmanager:us-east-2:111111111111:secret:my-api/db-url-AbC123
+          # SSM Parameter Store
+          API_KEY: arn:aws:ssm:us-east-2:111111111111:parameter/my-api/api-key
+        healthCheck: # container-level (ECS) health check; optional
+          command:
+            - CMD-SHELL
+            - curl -f http://localhost:8080/health || exit 1
+          interval: 30 # default: 30
+          timeout: 5 # default: 5
+          retries: 3 # default: 3
+          startPeriod: 60 # default: 60
+
+      taskRole: # what your application code may call at runtime
+        statements:
+          - Effect: Allow
+            Action: ['s3:GetObject']
+            Resource: arn:aws:s3:::my-bucket/*
+        managedPolicies:
+          - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        inheritProviderStatements: false # default: false (least-privilege)
+
+      executionRole:
+        # GetSecretValue is auto-granted for everything in container.secrets.
+        # Add extra ARNs here only if the task needs to read more at startup.
+        secretArns:
+          - arn:aws:secretsmanager:us-east-2:111111111111:secret:my-api/db-url-AbC123
+
+      logs:
+        retentionInDays: 30 # default: 30
+
+      loadBalancer:
+        scheme: internet-facing # default: internet-facing; or 'internal'
+        subnets: # ALB subnets (public, for internet-facing)
+          - subnet-aaaaaaaaaaaaaaaaa
+          - subnet-bbbbbbbbbbbbbbbbb
+        idleTimeout: 60 # default: 60. Raise for SSE / long-poll (e.g. 3600).
+        ingressCidr: 0.0.0.0/0 # default: 0.0.0.0/0. Narrow to lock down access.
+        listeners:
+          - { port: 80, protocol: HTTP, redirectToHttps: true }
+          - port: 443
+            protocol: HTTPS
+            sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06 # default shown
+            # certificate: { arn: arn:aws:acm:... }  # bring your own; else managed via `domain`
+        targetGroup:
+          healthCheckPath: /health # default: /health
+          healthCheckIntervalSeconds: 30 # default: 30
+          healthyThresholdCount: 2 # default: 2
+          unhealthyThresholdCount: 3 # default: 3
+          deregistrationDelay: 60 # default: 60
+          stickiness: false # default: false
+
+      domain: # optional — omit for an ALB-only stack (wire DNS yourself)
+        name: ${self:custom.cfg.domain}
+        # hostedZoneId: Z0123456789ABC      # optional — auto-resolved from `name` if omitted
+
+      deployment:
+        minimumHealthyPercent: 100 # default: 100
+        maximumPercent: 200 # default: 200
+        circuitBreaker: true # default: true
+        rollback: true # default: true
+        gracePeriodSeconds: 60 # default: 60
+
+
+      # Raw-CloudFormation escape hatch: deep-merged onto the generated resources
+      # for anything the schema doesn't expose.
+      # overrides:
+      #   service: {}
+      #   taskDefinition: {}
+      #   loadBalancer: {}

@@ -17,7 +17,7 @@ Named to contrast with [`serverless-fargate-tasks`](https://www.serverless.com/p
 | Raw-CloudFormation escape hatch per resource         | container only       | ❌                         | ❌                      | ✅                            |
 | No license gate (MIT)                                | ✅                   | ✅                         | ❌                      | ✅                            |
 
-The motivating use case: a remote **MCP server** (Server-Sent Events) that needs a long ALB idle timeout, Cognito/secrets wiring, and a custom HTTPS domain — none of which the existing plugins expose. See [`examples/mcp/`](examples/mcp/serverless.yml).
+The motivating use case: a remote **MCP server** (Server-Sent Events) that needs a long ALB idle timeout, secrets wiring, and a custom HTTPS domain — none of which the existing plugins expose. See [`examples/mcp/`](examples/mcp/serverless.yml) for a minimal real-world config, or [`examples/reference/`](examples/reference/serverless.yml) for an annotated example exercising every field.
 
 ## Install
 
@@ -55,9 +55,9 @@ fargate:
 
 ## Design notes & decisions
 
-Architecture decisions live in [`docs/adr/`](docs/adr); the glossary is in [`CONTEXT.md`](CONTEXT.md). Highlights:
+Key design choices:
 
-- **Generic engine, not MCP-aware** — MCP is a documented preset, not plugin code.
+- **Generic engine, not workload-aware** — specific workloads (e.g. an MCP server) are documented presets/examples, not plugin code.
 - **`assignPublicIp` defaults to `false`** (private). No-NAT VPCs must set `true`.
 - **Execution role** (plugin-managed: pull image, read secrets, write logs) vs **task role** (you declare what your code calls). Least-privilege by default.
 - **DNS/ACM optional** — omit `domain:` to get an ALB-only stack with its hostname as an output, and wire DNS yourself.

@@ -4,3 +4,7 @@ dist/
 .DS_Store
 .serverless/
 coverage/
+
+# Design/implementation docs kept local (LLM working context), not shipped in the repo
+/CONTEXT.md
+/docs/
