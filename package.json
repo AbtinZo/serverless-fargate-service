@@ -1,0 +1,50 @@
+{
+  "name": "serverless-fargate-service",
+  "version": "0.1.0",
+  "description": "Deploy long-running container web services to AWS ECS Fargate behind a fully-tunable Application Load Balancer — ACM, HTTPS, Route 53, secrets, health checks, and SSE-friendly timeouts, all in your serverless.yml.",
+  "keywords": [
+    "serverless",
+    "serverless-framework",
+    "plugin",
+    "aws",
+    "fargate",
+    "ecs",
+    "alb",
+    "container"
+  ],
+  "license": "MIT",
+  "author": "Abtin Zohrabi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbtinZo/serverless-fargate-service.git"
+  },
+  "homepage": "https://github.com/AbtinZo/serverless-fargate-service#readme",
+  "bugs": {
+    "url": "https://github.com/AbtinZo/serverless-fargate-service/issues"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "serverless": ">=4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

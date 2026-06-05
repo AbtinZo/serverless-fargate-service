@@ -1,0 +1,78 @@
+# MCP preset — a sanitized, copy-pasteable example of deploying a long-running
+# MCP server (SSE, OAuth, secrets) to ECS Fargate behind a tuned ALB.
+#
+# Replace the placeholder IDs/ARNs/domain with your own. The two tuning choices
+# that matter for an MCP/SSE server are called out inline.
+
+service: mcp-server
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  region: us-east-2
+
+plugins:
+  - serverless-fargate-service
+
+custom:
+  stages:
+    prod:
+      domain: mcp.example.com
+      assignPublicIp: true # set true only on no-NAT VPCs (Decision #8)
+    dev:
+      domain: mcp-dev.example.com
+      assignPublicIp: true
+  cfg: ${self:custom.stages.${sls:stage, 'prod'}}
+
+fargate:
+  cluster:
+    containerInsights: false
+  services:
+    mcp-server:
+      cpu: 512
+      memory: 1024
+      desiredCount: 1
+      vpc:
+        id: vpc-xxxxxxxx
+        subnets:
+          - subnet-aaaaaaa
+          - subnet-bbbbbbb
+        assignPublicIp: ${self:custom.cfg.assignPublicIp}
+      image:
+        # Build mode: plugin builds, ensures the ECR repo, sha-tags, pushes.
+        context: ../
+        dockerfile: Dockerfile
+        # Or consume a pre-built image instead:
+        # uri: 1234.dkr.ecr.us-east-2.amazonaws.com/mcp-server:sha-abc1234
+      container:
+        port: 8000
+        environment:
+          STAGE: ${sls:stage}
+          MCP_ISSUER: https://${self:custom.cfg.domain}
+        secrets:
+          MONGO_URI: arn:aws:secretsmanager:us-east-2:1234:secret:mcp/mongo-uri-AbC123
+          REDIS_URI: arn:aws:secretsmanager:us-east-2:1234:secret:mcp/redis-uri-DeF456
+        healthCheck:
+          command:
+            - CMD-SHELL
+            - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
+      taskRole:
+        statements:
+          - Effect: Allow
+            Action: [cognito-idp:AdminInitiateAuth]
+            Resource: arn:aws:cognito-idp:us-east-2:1234:userpool/us-east-2_xxxxx
+      loadBalancer:
+        subnets:
+          - subnet-aaaaaaa
+          - subnet-bbbbbbb
+        idleTimeout: 3600 # ← SSE: keep long-lived connections alive
+        listeners:
+          - { port: 80, protocol: HTTP, redirectToHttps: true }
+          - { port: 443, protocol: HTTPS }
+        targetGroup:
+          healthCheckPath: /health
+      domain:
+        name: ${self:custom.cfg.domain}
+        # hostedZoneId is optional — omit to auto-resolve from the domain name.
+        # Set it explicitly to override or disambiguate split-horizon zones:
+        # hostedZoneId: ZXXXXXXXXXXXXX
