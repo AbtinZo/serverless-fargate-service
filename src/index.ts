@@ -5,8 +5,7 @@
  * fully-tunable Application Load Balancer — defined entirely in serverless.yml.
  *
  * Lifecycle:
- *   before:package:finalize  -> resolve image URIs, synthesize CFN, merge into stack
- *   before:deploy:deploy     -> build & push images (build mode only)
+ *   before:package:finalize  -> build+push images (deploy only) & pin to digest, synthesize CFN
  *   after:deploy:deploy      -> print service outputs
  *   after:remove:remove      -> delete the ECR repo (build mode; opt-out via retain)
  */
@@ -29,6 +28,7 @@ interface Serverless {
   service: any;
   configurationInput?: any;
   serviceDir?: string;
+  processedInput?: { commands?: string[] };
   config?: { servicePath?: string };
   getProvider(name: string): {
     getRegion(): string;
@@ -45,7 +45,6 @@ class ServerlessFargateService {
   serverless: Serverless;
   provider: ReturnType<Serverless['getProvider']>;
   hooks: Record<string, () => void | Promise<void>>;
-  private buildPlans: BuildPlan[] = [];
 
   constructor(serverless: Serverless) {
     this.serverless = serverless;
@@ -54,10 +53,14 @@ class ServerlessFargateService {
 
     this.hooks = {
       'before:package:finalize': () => this.compile(),
-      'before:deploy:deploy': () => this.buildImages(),
       'after:deploy:deploy': () => this.printOutputs(),
       'after:remove:remove': () => this.removeRepositories(),
     };
+  }
+
+  /** True when the running command deploys (build+push happens; `package` does not). */
+  private isDeploy(): boolean {
+    return (this.serverless.processedInput?.commands ?? []).includes('deploy');
   }
 
   /** ECR repo name for a build-mode service. Shared by deploy and remove. */
@@ -77,11 +80,18 @@ class ServerlessFargateService {
     return this.serverless.serviceDir ?? this.serverless.config?.servicePath ?? process.cwd();
   }
 
-  /** Resolve build-mode image URIs and record a build plan for each. */
-  private async resolveImages(config: FargateConfig, region: string): Promise<void> {
+  /**
+   * For build-mode services: on deploy, build+push and pin the task definition
+   * to the image DIGEST (repo@sha256:...) so any content change — committed,
+   * uncommitted, or a base-image/dependency change — rolls the service, while
+   * identical content never causes a spurious rollout. On `package` (no deploy)
+   * use the tag URI and skip the build, so packaging never pushes.
+   */
+  private async prepareImages(config: FargateConfig, region: string): Promise<void> {
     const cwd = this.serviceDir();
     const serviceName: string = this.serverless.service.service;
     const stage = this.provider.getStage();
+    const deploying = this.isDeploy();
     let account: string | undefined;
 
     for (const [key, svc] of Object.entries<ServiceConfig>(config.services)) {
@@ -90,23 +100,29 @@ class ServerlessFargateService {
         throw new Error(`fargate.services.${key}.image needs either 'uri' or 'context'`);
       }
       account ??= await this.provider.getAccountId();
-      const region2 = region;
       const repo = this.repoName(serviceName, stage, key);
       const tag = resolveTag(svc.image.tag, cwd);
-      const imageUri = ecrUri(account, region2, repo, tag);
-      svc.image.uri = imageUri; // synth embeds the real URI
-      this.buildPlans.push({
+      const tagUri = ecrUri(account, region, repo, tag);
+
+      if (!deploying) {
+        svc.image.uri = tagUri; // package/preview only — build deferred to deploy
+        this.log(`(package) ${key} image ${tagUri} — build deferred to deploy`);
+        continue;
+      }
+
+      const plan: BuildPlan = {
         serviceKey: key,
         repository: repo,
         tag,
-        imageUri,
+        imageUri: tagUri,
         context: svc.image.context,
         dockerfile: svc.image.dockerfile ?? 'Dockerfile',
         platform: svc.image.platform ?? 'linux/amd64',
-        region: region2,
-        registry: `${account}.dkr.ecr.${region2}.amazonaws.com`,
+        region,
+        registry: `${account}.dkr.ecr.${region}.amazonaws.com`,
         repo: resolveRepoSettings(svc.image),
-      });
+      };
+      svc.image.uri = buildAndPush(plan, (m) => this.log(m)); // digest ref pins the task def
     }
   }
 
@@ -127,7 +143,7 @@ class ServerlessFargateService {
     const stage = this.provider.getStage();
     const serviceName: string = this.serverless.service.service;
 
-    await this.resolveImages(config, region);
+    await this.prepareImages(config, region);
     this.resolveDomains(config);
 
     const fragment = synthesize(config, { service: serviceName, stage });
@@ -136,12 +152,6 @@ class ServerlessFargateService {
     tpl.Outputs = { ...(tpl.Outputs ?? {}), ...fragment.Outputs };
 
     this.log(`synthesized ${Object.keys(config.services).length} service(s) into the stack`);
-  }
-
-  buildImages(): void {
-    for (const plan of this.buildPlans) {
-      buildAndPush(plan, (m) => this.log(m));
-    }
   }
 
   printOutputs(): void {

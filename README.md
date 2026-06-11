@@ -63,6 +63,7 @@ Key design choices:
 - **DNS/ACM optional** — omit `domain:` to get an ALB-only stack with its hostname as an output, and wire DNS yourself.
 - **`domain.hostedZoneId` auto-resolved** — omit it and the plugin derives the zone from `domain.name` via Route 53 (longest public-zone suffix match); set it explicitly to override or disambiguate split-horizon zones. Requires `route53:ListHostedZones` for the deploying principal.
 - **ECR repo lifecycle (build mode)** — the plugin creates the repo out-of-band (the image must exist before the stack references it) and, by default, **deletes it and its images on `serverless remove`** so teardown is clean. Set `image.retainRepositoryOnRemove: true` to keep images for rollback.
+- **Immutable digest deploys (build mode)** — the task definition is pinned to the image **digest** (`repo@sha256:…`), not the tag. So every content change — committed, uncommitted/dirty, or a base-image/dependency change — produces a new digest and rolls the service, while identical content never causes a spurious rollout. The build runs during `serverless deploy` (not `serverless package`).
 
 ## Development
 

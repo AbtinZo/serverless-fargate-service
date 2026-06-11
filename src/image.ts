@@ -47,9 +47,21 @@ export function gitShortSha(cwd: string): string {
   return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
 }
 
+/** True when the working tree has uncommitted or untracked changes. */
+export function isWorkingTreeDirty(cwd: string): boolean {
+  return (
+    execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8' }).trim().length > 0
+  );
+}
+
+/** Pure tag formatting. A literal spec passes through; 'sha'/undefined -> sha-<sha>[-dirty]. */
+export function formatTag(spec: string | undefined, sha: string, dirty: boolean): string {
+  if (spec && spec !== 'sha') return spec; // 'latest' or a literal tag
+  return `sha-${sha}${dirty ? '-dirty' : ''}`;
+}
+
 export function resolveTag(spec: string | undefined, cwd: string): string {
-  if (!spec || spec === 'sha') return `sha-${gitShortSha(cwd)}`;
-  return spec; // 'latest' or a literal tag
+  return formatTag(spec, gitShortSha(cwd), isWorkingTreeDirty(cwd));
 }
 
 export function ecrUri(account: string, region: string, repo: string, tag: string): string {
@@ -169,7 +181,29 @@ export function deleteRepository(repo: string, region: string, log: (m: string) 
   }
 }
 
-export function buildAndPush(plan: BuildPlan, log: (m: string) => void): void {
+/**
+ * The immutable digest reference (repo@sha256:...) for a pushed image, via
+ * `docker inspect`. Returns '' if it can't be determined.
+ */
+export function imageDigestRef(imageUri: string, repoPrefix: string): string {
+  try {
+    const out = execFileSync('docker', ['inspect', '--format', '{{json .RepoDigests}}', imageUri], {
+      encoding: 'utf8',
+    });
+    const digests: string[] = JSON.parse(out) ?? [];
+    return digests.find((d) => d.startsWith(`${repoPrefix}@`)) ?? digests[0] ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Build, push, and return the immutable digest reference (repo@sha256:...) to
+ * pin the task definition to. Falls back to the tag URI if the digest can't be
+ * resolved. Pinning to the digest — not the tag — guarantees a rollout whenever
+ * image content changes, including dirty builds that reuse a git-sha tag.
+ */
+export function buildAndPush(plan: BuildPlan, log: (m: string) => void): string {
   ensureRepository(plan.repository, plan.region, plan.repo);
 
   log(`Building ${plan.imageUri}`);
@@ -199,4 +233,12 @@ export function buildAndPush(plan: BuildPlan, log: (m: string) => void): void {
 
   log(`Pushing ${plan.imageUri}`);
   execFileSync('docker', ['push', plan.imageUri], { stdio: 'inherit' });
+
+  const digestRef = imageDigestRef(plan.imageUri, `${plan.registry}/${plan.repository}`);
+  if (digestRef) {
+    log(`Pinning task definition to digest: ${digestRef}`);
+    return digestRef;
+  }
+  log(`Could not resolve image digest; pinning to tag ${plan.imageUri}`);
+  return plan.imageUri;
 }

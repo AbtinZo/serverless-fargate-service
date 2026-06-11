@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { buildLifecyclePolicy, resolveRepoSettings } from '../src/image';
+import { buildLifecyclePolicy, resolveRepoSettings, formatTag } from '../src/image';
+
+describe('formatTag', () => {
+  it('uses sha-<sha> on a clean working tree', () => {
+    expect(formatTag('sha', 'abc1234', false)).toBe('sha-abc1234');
+    expect(formatTag(undefined, 'abc1234', false)).toBe('sha-abc1234');
+  });
+
+  it('appends -dirty when the working tree has changes', () => {
+    // Cosmetic only — the digest reference is what actually forces a rollout —
+    // but it distinguishes dirty builds from clean ones in ECR.
+    expect(formatTag('sha', 'abc1234', true)).toBe('sha-abc1234-dirty');
+  });
+
+  it('passes a literal tag through unchanged', () => {
+    expect(formatTag('v1.2.3', 'abc1234', true)).toBe('v1.2.3');
+    expect(formatTag('latest', 'abc1234', false)).toBe('latest');
+  });
+});
 
 describe('ECR lifecycle policy', () => {
   it('defaults match the legacy 01-ecr.yml (keep last 20 sha-, expire untagged 7d)', () => {

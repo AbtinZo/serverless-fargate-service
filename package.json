@@ -1,6 +1,6 @@
 {
   "name": "serverless-fargate-service",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deploy long-running container web services to AWS ECS Fargate behind a fully-tunable Application Load Balancer — ACM, HTTPS, Route 53, secrets, health checks, and SSE-friendly timeouts, all in your serverless.yml.",
   "keywords": [
     "serverless",
